@@ -88,7 +88,7 @@ blurbs = [
     {
         "name": "gpt",
         "display": "Use GPT",
-        "blurb": "Use OpenAI's GPT-4 to transform your writing and make you harder to identify. (Note that this sends your text to OpenAI's servers.)",
+        "blurb": "Use OpenAI's GPT-4 to transform your writing and make you harder to identify. (Note that this sends your messages to OpenAI's servers.)",
     },
     {
         "name": "lowercase",
