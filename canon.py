@@ -13,7 +13,6 @@ import config
 
 logging.basicConfig(filename=config.log_file, encoding="utf-8", format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s", level=logging.INFO)
 app = flask.Flask(__name__)
-app.secret_key = config.secret_key
 
 client = discord.Client(intents=discord.Intents())
 loop = asyncio.get_event_loop()
