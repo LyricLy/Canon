@@ -169,12 +169,16 @@ def notify():
     persona = json["persona"]
     user = json["user"]
     url = json["url"]
+    content = json["content"]
     name = persona_name(persona) if persona != -1 else f"<@{user}>"
-    send_parent = parent != user and get_settings(parent)["notify_comments"]
-    if send_parent:
-        do(do(esolangs.fetch_member(parent)).send(f"{name} commented on your submission at <{url}>"))
-    if reply and not (send_parent and parent == reply) and get_settings(reply)["notify_replies"]:
-        do(do(esolangs.fetch_member(reply)).send(f"{name} replied to your comment at <{url}>"))
+    messages = {}
+    if get_settings(parent)["notify_comments"]:
+        messages[parent] = "commented on your submission"
+    if get_settings(reply)["notify_replies"]:
+        messages[reply] = "replied to your comment"
+    for k, v in messages.items():
+        if k != user:
+            do(do(esolangs.fetch_member(k)).send(f"{name} {v} at <{url}>:\n{content}"))
     return "", 204
 
 @app.route("/personas/<int:id>", methods=["DELETE"])
