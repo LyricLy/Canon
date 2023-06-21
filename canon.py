@@ -71,7 +71,7 @@ def add_persona(user):
     json = flask.request.json
     name = json["name"].strip()
     db = get_db()
-    if conflicts(name) or not json.get("sudo") and (name.startswith("jan ") or name.startswith("[") and name.endswith("]")):
+    if conflicts(name) or not json.get("sudo") and (not name or name.startswith("jan ") or name.startswith("[") and name.endswith("]")):
         return {"result": "taken"}, 403
     id = db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?) RETURNING id", (user, name, json.get("temp", False))).fetchone()[0]
     db.commit()
