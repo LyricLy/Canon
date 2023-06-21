@@ -199,10 +199,10 @@ def get_persona(id):
 @app.route("/personas/who")
 def reveal():
     name = flask.request.args["name"]
-    user, p = get_db().execute("SELECT user, id FROM Personas WHERE active AND name = ?", (name,)).fetchone()
-    if not p:
+    r = get_db().execute("SELECT user, id FROM Personas WHERE active AND name = ?", (name,)).fetchone()
+    if not r:
         return {"result": "missing"}, 404
-    return {"result": "success", "id": p, "owner": user}
+    return {"result": "success", **r}
 
 @app.route("/personas/purge", methods=["POST"])
 def clear_temp_personas():
