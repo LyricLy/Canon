@@ -19,6 +19,7 @@ loop = asyncio.get_event_loop()
 do = loop.run_until_complete
 do(client.login(config.token))
 esolangs = do(client.fetch_guild(346530916832903169))
+lyricly = do(esolangs.fetch_member(319753218592866315))
 
 
 def get_db():
@@ -179,6 +180,11 @@ def notify():
     for k, v in messages.items():
         if k != user:
             do(do(esolangs.fetch_member(k)).send(f"{name} {v} at <{url}>:\n{content}"))
+    return "", 204
+
+@app.route("/round-over", methods=["POST"])
+def round_over():
+    do(lyricly.send("everyone has finished guessing"))
     return "", 204
 
 @app.route("/personas/<int:id>", methods=["DELETE"])
