@@ -63,7 +63,7 @@ def can_play(user):
 def get_personas(user):
     db = get_db()
     if not db.execute("SELECT NULL FROM Personas WHERE active AND toki_pona AND user = ?", (user,)).fetchone():
-        db.execute("INSERT INTO Personas (user, name, temp, toki_pona) VALUES (?, ?, 1, 1)", (user, rand_name()))
+        db.execute("INSERT INTO Personas (user, name, temp, toki_pona, last_used) SELECT ?, ?, 1, 1, COALESCE(MAX(last_used), 0) FROM Personas WHERE toki_pona AND user = ?1", (user, rand_name()))
         db.commit()
     return [{"id": id, "name": name, "temp": temp} for id, name, temp in db.execute("SELECT id, name, temp FROM Personas WHERE active AND user = ? ORDER BY last_used DESC", (user,))]
 
