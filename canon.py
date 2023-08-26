@@ -17,9 +17,14 @@ app = flask.Flask(__name__)
 client = discord.Client(intents=discord.Intents())
 loop = asyncio.get_event_loop()
 do = loop.run_until_complete
-do(client.login(config.token))
-esolangs = do(client.fetch_guild(346530916832903169))
-lyricly = do(esolangs.fetch_member(319753218592866315))
+
+if config.token:
+    do(client.login(config.token))
+    guild = do(client.fetch_guild(config.guild_id))
+    admin = do(guild.fetch_member(config.admin_id))
+else:
+    guild = None
+    admin = None
 
 
 def get_db():
@@ -53,7 +58,8 @@ def rand_name():
 @app.route("/users/<int:user>")
 def can_play(user):
     try:
-        do(esolangs.fetch_member(user))
+        if guild:
+            do(guild.fetch_member(user))
     except discord.NotFound:
         return {"result": False}
     else:
@@ -178,13 +184,14 @@ def notify():
     if get_settings(reply)["notify_replies"]:
         messages[reply] = "replied to your comment"
     for k, v in messages.items():
-        if k != user:
-            do(do(esolangs.fetch_member(k)).send(f"{name} {v} at <{url}>:\n{content}"))
+        if k != user and guild:
+            do(do(guild.fetch_member(k)).send(f"{name} {v} at <{url}>:\n{content}"))
     return "", 204
 
 @app.route("/round-over", methods=["POST"])
 def round_over():
-    do(lyricly.send("everyone has finished guessing"))
+    if admin:
+        do(admin.send("everyone has finished guessing"))
     return "", 204
 
 @app.route("/personas/<int:id>", methods=["DELETE"])
