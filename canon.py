@@ -6,7 +6,7 @@ import discord
 import asyncio
 
 import flask
-import openai
+from openai import OpenAI
 
 import config
 
@@ -25,6 +25,8 @@ if config.token:
 else:
     guild = None
     admin = None
+
+openai = OpenAI()
 
 
 def get_db():
@@ -154,14 +156,14 @@ def transform(user):
         text = text[1:]
     else:
         if settings["gpt"]:
-            completion = openai.ChatCompletion.create(
+            completion = openai.chat.completions.create(
                 model="gpt-3.5-turbo-1106",
                 messages=[
                     {"role": "system", "content": """As a bot that helps people remain anonymous, you rewrite messages to sound more generic. Your responses should always have the same meaning, perspective and similar tone to the original message, but with different wording and grammar. Please take care to preserve the meaning of programming- and computer-related terms. "Esolangs" is a proper noun and should never be changed. Discord markup should also be left alone."""},
                     {"role": "user", "content": text},
                 ],
             )
-            text = completion["choices"][0]["message"]["content"]
+            text = completion.choices[0].message.content
         if settings["lowercase"]:
             text = text.lower()
         if settings["punctuation"]:
