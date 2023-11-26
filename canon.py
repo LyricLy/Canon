@@ -157,7 +157,7 @@ def transform(user):
     else:
         if settings["gpt"]:
             completion = openai.chat.completions.create(
-                model="gpt-3.5-turbo-1106",
+                model="gpt-4",
                 messages=[
                     {"role": "system", "content": """As a bot that helps people remain anonymous, you rewrite messages to sound more generic. Your responses should always have the same meaning, perspective and similar tone to the original message, but with different wording and grammar. Please take care to preserve the meaning of programming- and computer-related terms. "Esolangs" is a proper noun and should never be changed. Discord markup should also be left alone."""},
                     {"role": "user", "content": text},
