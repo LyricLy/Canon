@@ -75,12 +75,18 @@ def get_personas(user):
         db.commit()
     return [{"id": id, "name": name, "temp": temp} for id, name, temp in db.execute("SELECT id, name, temp FROM Personas WHERE active AND user = ? ORDER BY last_used DESC", (user,))]
 
+def receive_user(json):
+    name = json["name"].strip()
+    if not json.get("sudo") and (conflicts(name) or not name or not name.isprintable() or name.startswith("jan ") or name.startswith("[") and name.endswith("]")):
+        return None
+    return name
+
 @app.route("/users/<int:user>/personas", methods=["POST"])
 def add_persona(user):
     json = flask.request.json
-    name = json["name"].strip()
+    name = receive_user(json)
     db = get_db()
-    if conflicts(name) or not json.get("sudo") and (not name or not name.isprintable() or name.startswith("jan ") or name.startswith("[") and name.endswith("]")):
+    if not name:
         return {"result": "taken"}, 403
     id = db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?) RETURNING id", (user, name, json.get("temp", False))).fetchone()[0]
     db.commit()
@@ -196,13 +202,6 @@ def round_over():
         do(admin.send("everyone has finished guessing"))
     return "", 204
 
-@app.route("/personas/<int:id>", methods=["DELETE"])
-def disable_persona(id):
-    db = get_db()
-    db.execute("UPDATE Personas SET active = 0 WHERE id = ?", (id,))
-    db.commit()
-    return "", 204
-
 def persona_name(id):
     name, = get_db().execute("SELECT name FROM Personas WHERE id = ?", (id,)).fetchone()
     return name
@@ -210,6 +209,24 @@ def persona_name(id):
 @app.route("/personas/<int:id>")
 def get_persona(id):
     return {"name": persona_name(id)}
+
+@app.route("/personas/<int:id>", methods=["DELETE"])
+def disable_persona(id):
+    db = get_db()
+    db.execute("UPDATE Personas SET active = 0 WHERE id = ?", (id,))
+    db.commit()
+    return "", 204
+
+@app.route("/personas/<int:id>", methods=["PATCH"])
+def edit_persona(id):
+    json = flask.request.json
+    name = receive_user(json)
+    if not name:
+        return {"result": "taken"}, 403
+    db = get_db()
+    db.execute("UPDATE Personas SET name = ? WHERE id = ?", (name, id))
+    db.commit()
+    return {"result": "success"}
 
 @app.route("/personas/who")
 def reveal():
