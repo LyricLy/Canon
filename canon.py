@@ -251,7 +251,12 @@ intents = discord.Intents(
     message_content=True,
     members=True,
 )
-bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=discord.AllowedMentions.none())
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions.none(),
+    help_command=commands.DefaultHelpCommand(width=120, no_category="Commands"),
+)
 
 @bot.event
 async def on_command_error(ctx, exc, old_command_error=bot.on_command_error):
@@ -350,8 +355,8 @@ Target = Persona | discord.TextChannel | discord.User
 @commands.dm_only()
 @commands.max_concurrency(1, wait=True)
 @bot.group(invoke_without_command=True)
-async def anon(ctx, target: Target):
-    """Anonymously message a user or channel (use in DMs)"""
+async def anon(ctx, target=commands.param(converter=Target, description="Persona, channel, or user to connect to")):
+    """Anonymously message a user or channel, for use in DMs only."""
     try:
         # find which persona we are
         we_are = await selected_persona(ctx.author)
@@ -403,7 +408,10 @@ async def anon(ctx, target: Target):
 
 @anon.command(aliases=["ls"])
 async def who(ctx):
-    """See who is connected to the current channel."""
+    """See who is connected to the current channel.
+
+    When used in DMs, shows where each of your personas are currently connected, as well as which of your personas is active.
+    """
     if ctx.guild:
         await ctx.send("\n".join(f"- {conn.mention}" for conn in await connections(ctx.channel.id) if conn) or "Nobody!")
     else:
@@ -433,8 +441,15 @@ async def who(ctx):
 
 @commands.dm_only()
 @anon.command(aliases=["cd"])
-async def switch(ctx, *, target: Target = commands.Author):
-    """Change which of your personas is the 'active' one."""
+async def switch(ctx, *, target: Target = commands.Author.replace(description="Name of the persona to switch to, or of somewhere one of your personas is connected")):
+    """Change which of your personas is the 'active' one.
+
+    Messages you send are bridged to wherever your active persona is connected. `!anon` and `!anon stop` also act only on your active persona.
+    While this command is usually used with the name of one of your personas, it also suffices to provide the name of a place one of your personas is connected.
+    For instance, if your persona "jan Apo" is connected to game-discussion, `!anon switch jan Apo` and `!anon switch game-discussion` are equivalent.
+
+    It is also possible not to have any persona selected at all, by doing `!anon switch` on its own. This allows you to talk to or hang up on someone who is anonymously DMing you.
+    """
     for to in [target, *await connections(target.id)]:
         if to == ctx.author or isinstance(to, Persona) and to.user == ctx.author:
             break
@@ -481,7 +496,8 @@ async def personas(ctx):
 
 @commands.dm_only()
 @personas.command(aliases=["new", "create", "make"])
-async def add(ctx, *, name):
+async def add(ctx, *, name=commands.param(description="Name of the persona to create")):
+    """Create a new persona."""
     if await conflicts(name):
         return await ctx.send("That name is taken or reserved.")
     await db.execute("INSERT INTO Personas (user, name) VALUES (?, ?)", (ctx.author.id, name))
@@ -490,7 +506,8 @@ async def add(ctx, *, name):
 
 @commands.dm_only()
 @personas.command(aliases=["delete", "del", "rm", "nix"])
-async def remove(ctx, *, name):
+async def remove(ctx, *, name=commands.param(description="Name of the persona to remove")):
+    """Remove a persona."""
     async with db.execute("UPDATE Personas SET active = 0 WHERE active AND user = ? AND name = ? RETURNING 1", (ctx.author.id, name)) as cur:
         if not await cur.fetchone():
             return await ctx.send(f"You have no persona named '{name}'.")
@@ -502,8 +519,19 @@ def cfg_norm(s):
 
 @commands.dm_only()
 @anon.command(aliases=["settings", "config", "opt", "options"])
-async def cfg(ctx, name=None, value: bool = None):
-    name = name and cfg_norm(name)
+async def cfg(
+    ctx,
+    option=commands.param(default=None, description="Option to view or edit"),
+    value=commands.param(converter=bool, default=None, description="Value to set the option to (yes/no)"),
+):
+    """Change settings related to anonymous communication.
+
+    Has 3 forms:
+      cfg                   List all options and their current values.
+      cfg <option>          Show the current value of a particular option.
+      cfg <option> <value>  Change an option.
+    """
+    name = option and cfg_norm(option)
     settings = await fetch_settings(ctx.author.id)
     if value is None:
         embed = discord.Embed()
