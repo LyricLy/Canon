@@ -199,8 +199,8 @@ async def notify(request):
     if (await fetch_settings(reply))["notify_replies"]:
         messages[reply] = "replied to your comment"
     for k, v in messages.items():
-        if True:
-            asyncio.create_task(bot.get_guild(config.guild_id).get_member(k).send(f"{name} {v} at <{url}>:\n{content}"))
+        if k != user:
+            asyncio.create_task(bot.get_user(k).send(f"{name} {v} at <{url}>:\n{content}"))
     return web.Response(status=204)
 
 def our_staff():
