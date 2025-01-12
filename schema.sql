@@ -15,5 +15,17 @@ CREATE TABLE Settings (
     punctuation INTEGER NOT NULL DEFAULT 1,
     notify_comments INTEGER NOT NULL DEFAULT 1,
     notify_replies INTEGER NOT NULL DEFAULT 1,
-    dms INTEGER NOT NULL DEFAULT 0
+    dms INTEGER NOT NULL DEFAULT 0,
+    persona_dms INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE SelectedPersona (
+    user INTEGER PRIMARY KEY,
+    persona INTEGER NOT NULL,
+    FOREIGN KEY (persona) REFERENCES Personas (id)
+);
+
+CREATE TABLE AnonConnections (
+    a INTEGER NOT NULL,
+    b INTEGER NOT NULL
 );

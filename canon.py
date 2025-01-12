@@ -1,103 +1,97 @@
-import sqlite3
+import asyncio
+import datetime
 import logging
 import random
 import time
-import discord
-import asyncio
 
-import flask
-from openai import OpenAI
+import aiosqlite
+import aiohttp
+import discord
+from aiohttp import web
+from discord.ext import commands
+from bs4 import BeautifulSoup
+from openai import AsyncOpenAI
 
 import config
 
-
-logging.basicConfig(filename=config.log_file, encoding="utf-8", format="[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s", level=logging.INFO)
-app = flask.Flask(__name__)
-
-client = discord.Client(intents=discord.Intents())
-loop = asyncio.get_event_loop()
-do = loop.run_until_complete
-
-if config.token:
-    do(client.login(config.token))
-    guild = do(client.fetch_guild(config.guild_id))
-    admin = do(guild.fetch_member(config.admin_id))
+if config.log_file:
+    discord.utils.setup_logging(handler=logging.FileHandler(filename=config.log_file, encoding="utf-8"))
 else:
-    guild = None
-    admin = None
-
-openai = OpenAI()
+    discord.utils.setup_logging()
 
 
-def get_db():
-    try:
-        return flask.g._db
-    except AttributeError:
-        db = sqlite3.connect("the.db")
-        db.row_factory = sqlite3.Row
-        flask.g._db = db
-        return db
-
-@app.teardown_appcontext
-def close_connection(exception):
-    try:
-        flask.g._db.close()
-    except AttributeError:
-        pass
-
-def conflicts(name):
-    return bool(get_db().execute("SELECT NULL FROM Personas WHERE active AND name = ?", (name,)).fetchone())
+openai = AsyncOpenAI()
+routes = web.RouteTableDef()
 
 with open("names") as f:
-    names = f.read().splitlines()
+    NAMES = f.read().splitlines()
 
-def rand_name():
+async def rand_name():
     while True:
-        name = random.choice(names)
-        if not conflicts(name):
+        name = random.choice(NAMES)
+        if not await conflicts(name):
             return name
 
-@app.route("/users/<int:user>")
-def can_play(user):
-    try:
-        if guild:
-            do(guild.fetch_member(user))
-    except discord.NotFound:
-        return {"result": False}
+async def conflicts(name):
+    async with db.execute("SELECT EXISTS(SELECT 1 FROM Personas WHERE active AND name = ?)", (name,)) as cur:
+        r, = await cur.fetchone()
+    return r
+
+@routes.get(r"/users/{user:\d+}")
+async def can_play(request):
+    user = int(request.match_info["user"])
+    if bot.is_ready():
+        can_play = bool(bot.get_guild(config.guild_id).get_member(user))
     else:
-        return {"result": True}
+        can_play = not config.guild_id
+    return web.json_response({"can_play": can_play, "is_admin": user in our_staff()})
 
-@app.route("/users/<int:user>/personas")
-def get_personas(user):
-    db = get_db()
-    if not db.execute("SELECT NULL FROM Personas WHERE active AND toki_pona AND user = ?", (user,)).fetchone():
-        db.execute("INSERT INTO Personas (user, name, temp, toki_pona, last_used) SELECT ?, ?, 1, 1, COALESCE(MAX(last_used), 0) FROM Personas WHERE toki_pona AND user = ?1", (user, rand_name()))
-        db.commit()
-    return [{"id": id, "name": name, "temp": temp} for id, name, temp in db.execute("SELECT id, name, temp FROM Personas WHERE active AND user = ? ORDER BY last_used DESC", (user,))]
+async def fetch_personas(user):
+    async with db.execute("SELECT EXISTS(SELECT 1 FROM Personas WHERE active AND toki_pona AND user = ?)", (user,)) as cur:
+        has_toki_pona, = await cur.fetchone()
+    if not has_toki_pona:
+        await db.execute("INSERT INTO Personas (user, name, temp, toki_pona, last_used) SELECT ?, ?, 1, 1, COALESCE(MAX(last_used), 0) FROM Personas WHERE toki_pona AND user = ?1", (user, await rand_name()))
+        await db.commit()
 
-def receive_user(json):
+    async with db.execute("SELECT * FROM Personas WHERE active AND user = ? ORDER BY last_used DESC", (user,)) as cur:
+        return [Persona(row) for row in await cur.fetchall()]
+
+@routes.get(r"/users/{user:\d+}/personas")
+async def get_personas(request):
+    user = int(request.match_info["user"])
+    return web.json_response([{"id": p.id, "name": p.name, "temp": p.temp} for p in await fetch_personas(user)])
+
+async def parse_user_obj(json):
     name = json["name"].strip()
-    if not json.get("sudo") and (conflicts(name) or not name or not name.isprintable() or name.startswith("jan ") or name.startswith("[") and name.endswith("]")):
+    if not json.get("sudo") and (
+        await conflicts(name)
+     or not name
+     or not name.isprintable()
+     or name.startswith("jan ")
+     or name.startswith("[") and name.endswith("]")
+    ):
         return None
     return name
 
-@app.route("/users/<int:user>/personas", methods=["POST"])
-def add_persona(user):
-    json = flask.request.json
-    name = receive_user(json)
-    db = get_db()
+@routes.post(r"/users/{user:\d+}/personas")
+async def add_persona(request):
+    user = int(request.match_info["user"])
+    json = await request.json()
+    name = await parse_user_obj(json)
     if not name:
-        return {"result": "taken"}, 403
-    id = db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?) RETURNING id", (user, name, json.get("temp", False))).fetchone()[0]
-    db.commit()
-    return {"result": "success", "id": id}
+        return web.json_response({"result": "taken"}, status=403)
 
-def get_settings(user):
-    db = get_db()
-    return dict(
-        db.execute("SELECT * FROM Settings WHERE user = ?", (user,)).fetchone()
-     or db.execute("INSERT OR IGNORE INTO Settings (user) VALUES (?) RETURNING *", (user,)).fetchone()
-    )
+    async with db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?) RETURNING id", (user, name, json.get("temp", False))) as cur:
+        id, = await cur.fetchone()
+    await db.commit()
+    return web.json_response({"result": "success", "id": id})
+
+async def fetch_settings(user):
+    async with db.execute("SELECT * FROM Settings WHERE user = ?", (user,)) as cur:
+        if r := await cur.fetchone():
+            return dict(r)
+    async with db.execute("INSERT OR IGNORE INTO Settings (user) VALUES (?) RETURNING *", (user,)) as cur:
+        return dict(await cur.fetchone())
 
 blurbs = [
     {
@@ -118,54 +112,56 @@ blurbs = [
     {
         "name": "notify_comments",
         "display": "Comment notifications",
-        "blurb": "Esobot will DM you if someone sends a comment on a code guessing submission you wrote.",
+        "blurb": "Canon will DM you if someone sends a comment on a code guessing submission you wrote.",
     },
     {
         "name": "notify_replies",
         "display": "Reply notifications",
-        "blurb": "Esobot will DM you if someone replies to a comment you made.",
+        "blurb": "Canon will DM you if someone replies to a comment you made.",
     },
     {
         "name": "dms",
         "display": "Receive DMs",
-        "blurb": "Users will be able to send direct messages to you anonymously through Esobot.",
+        "blurb": "Users will be able to send direct messages to you anonymously through Canon.",
+    },
+    {
+        "name": "persona_dms",
+        "display": "Receive DMs via personas",
+        "blurb": "Users will be able to send direct messages to you using the names of your personas. You'll remain anonymous in these interactions.",
     },
 ]
 
-@app.route("/users/<int:user>/settings")
-def settings(user):
-    s = get_settings(user)
-    return [{"value": s[d["name"]], **d} for d in blurbs]
+@routes.get(r"/users/{user:\d+}/settings")
+async def settings(request):
+    user = int(request.match_info["user"])
+    s = await fetch_settings(user)
+    return web.json_response([{"value": s[d["name"]], **d} for d in blurbs])
 
-@app.route("/users/<int:user>/settings", methods=["POST"])
-def set_settings(user):
-    settings = flask.request.json
-    db = get_db()
-    db.execute(
-        "INSERT OR REPLACE INTO Settings (user, gpt, lowercase, punctuation, notify_comments, notify_replies, dms) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (user, "gpt" in settings, "lowercase" in settings, "punctuation" in settings, "notify_comments" in settings, "notify_replies" in settings, "dms" in settings)
+@routes.post(r"/users/{user:\d+}/settings")
+async def set_settings(request):
+    user = int(request.match_info["user"])
+    settings = await request.json()
+    await db.execute(
+        "INSERT OR REPLACE INTO Settings (user, gpt, lowercase, punctuation, notify_comments, notify_replies, dms, persona_dms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user, "gpt" in settings, "lowercase" in settings, "punctuation" in settings, "notify_comments" in settings, "notify_replies" in settings, "dms" in settings, "persona_dms" in settings),
     )
-    db.commit()
-    return "", 204
+    await db.commit()
+    return web.Response(status=204)
 
-@app.route("/users/<int:user>/transform", methods=["POST"])
-def transform(user):
-    json = flask.request.json
-    settings = get_settings(user)
+async def transform_text(text, persona, user_id):
+    settings = await fetch_settings(user_id)
 
-    db = get_db()
-    db.execute("UPDATE Personas SET last_used = ? WHERE id = ?", (time.time(), json["persona"]))
-    db.commit()
+    await db.execute("UPDATE Personas SET last_used = ? WHERE id = ?", (time.time(), persona))
+    await db.commit()
 
-    text = json["text"]
     if text.startswith("\\"):
         text = text[1:]
     else:
         if settings["gpt"]:
-            completion = openai.chat.completions.create(
+            completion = await openai.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": """As a bot that helps people remain anonymous, you rewrite messages to sound more generic. Your responses should always have the same meaning, perspective and similar tone to the original message, but with different wording and grammar. Please take care to preserve the meaning of programming- and computer-related terms. "Esolangs" is a proper noun and should never be changed. Discord markup should also be left alone."""},
+                    {"role": "system", "content": """As a bot that helps people remain anonymous, you rewrite messages to sound more generic. Your responses should always have the same meaning, perspective and similar tone to the original message, but with different wording and grammar. Please take care to preserve the meaning of programming- and computer-related terms. "code guessing" is a proper noun and should never be changed. Discord markup should also be left alone."""},
                     {"role": "user", "content": text},
                 ],
             )
@@ -174,71 +170,325 @@ def transform(user):
             text = text.lower()
         if settings["punctuation"]:
             text = text.replace(",", "").replace("'", "").replace(".", "").replace("?", "")
-    return {"text": text}
 
-@app.route("/notify", methods=["POST"])
-def notify():
-    json = flask.request.json
+    return text
+
+@routes.post(r"/users/{user:\d+}/transform")
+async def transform(request):
+    user = int(request.match_info["user"])
+    json = await request.json()
+    return web.json_response({"text": await transform_text(json["text"], json["persona"], user)})
+
+@routes.post("/notify")
+async def notify(request):
+    if not bot.is_ready() or not config.guild_id:
+        return web.Response(status=204)
+    json = await request.json()
     parent = json["parent"]
     reply = json["reply"]
     persona = json["persona"]
     user = json["user"]
     url = json["url"]
     content = json["content"]
-    name = persona_name(persona) if persona != -1 else f"<@{user}>"
+    name = (await get_persona(persona)).name if persona != -1 else f"<@{user}>"
     messages = {}
-    if get_settings(parent)["notify_comments"]:
+    if (await fetch_settings(parent))["notify_comments"]:
         messages[parent] = "commented on your submission"
-    if get_settings(reply)["notify_replies"]:
+    if (await fetch_settings(reply))["notify_replies"]:
         messages[reply] = "replied to your comment"
     for k, v in messages.items():
-        if k != user and guild:
-            do(do(guild.fetch_member(k)).send(f"{name} {v} at <{url}>:\n{content}"))
-    return "", 204
+        if True:
+            asyncio.create_task(bot.get_guild(config.guild_id).get_member(k).send(f"{name} {v} at <{url}>:\n{content}"))
+    return web.Response(status=204)
 
-@app.route("/round-over", methods=["POST"])
-def round_over():
-    if admin:
-        do(admin.send("everyone has finished guessing"))
-    return "", 204
+def our_staff():
+    if isinstance(config.admin_ids, list):
+        return config.admin_ids
+    return [x.id for x in bot.get_guild(config.guild_id).get_role(config.admin_ids).members]
 
-def persona_name(id):
-    name, = get_db().execute("SELECT name FROM Personas WHERE id = ?", (id,)).fetchone()
-    return name
+@routes.post("/round-over")
+async def round_over(request):
+    if config.guild_id and (guild := bot.get_guild(config.guild_id)):
+        for admin_id in our_staff():
+            if admin := guild.get_member(admin_id):
+                asyncio.create_task(admin.send("everyone has finished guessing"))
+    return web.Response(status=204)
 
-@app.route("/personas/<int:id>")
-def get_persona(id):
-    return {"name": persona_name(id)}
+@routes.get(r"/personas/{persona:\d+}")
+async def get_persona(request):
+    persona = int(request.match_info["persona"])
+    return web.json_response({"name": (await get_persona(persona)).name})
 
-@app.route("/personas/<int:id>", methods=["DELETE"])
-def disable_persona(id):
-    db = get_db()
-    db.execute("UPDATE Personas SET active = 0 WHERE id = ?", (id,))
-    db.commit()
-    return "", 204
+@routes.delete(r"/personas/{persona:\d+}")
+async def disable_persona(request):
+    persona = int(request.match_info["persona"])
+    await db.execute("UPDATE Personas SET active = 0 WHERE id = ?", (persona,))
+    await db.commit()
+    return web.Response(status=204)
 
-@app.route("/personas/<int:id>", methods=["PATCH"])
-def edit_persona(id):
-    json = flask.request.json
-    name = receive_user(json)
+@routes.patch(r"/personas/{persona:\d+}")
+async def edit_persona(request):
+    json = await request.json()
+    name = await parse_user_obj(json)
     if not name:
-        return {"result": "taken"}, 403
-    db = get_db()
-    db.execute("UPDATE Personas SET name = ? WHERE id = ?", (name, id))
-    db.commit()
-    return {"result": "success"}
+        return web.json_response({"result": "taken"}, status=403)
+    await db.execute("UPDATE Personas SET name = ? WHERE id = ?", (name, id))
+    await db.commit()
+    return web.json_response({"result": "success"})
 
-@app.route("/personas/who")
-def reveal():
-    name = flask.request.args["name"]
-    r = get_db().execute("SELECT user, id FROM Personas WHERE active AND name = ?", (name,)).fetchone()
+@routes.post("/personas/purge")
+async def clear_temp_personas(request):
+    await db.execute("UPDATE Personas SET active = 0 WHERE temp")
+    await db.commit()
+    return web.Response(status=204)
+
+
+intents = discord.Intents(
+    guilds=True,
+    messages=True,
+    message_content=True,
+    members=True,
+)
+bot = commands.Bot(command_prefix="!", intents=intents, allowed_mentions=discord.AllowedMentions.none())
+
+@bot.event
+async def on_command_error(ctx, exc, old_command_error=bot.on_command_error):
+    if isinstance(exc, commands.CommandNotFound):
+        return
+    if isinstance(exc, commands.UserInputError):
+        return await ctx.send(exc)
+    await db.rollback()
+    await old_command_error(ctx, exc)
+
+if config.cg_url:
+    @bot.command()
+    async def cg(ctx):
+        """Current information about code guessing."""
+        async with session.get(config.cg_url) as resp:
+            soup = BeautifulSoup(await resp.text(), "lxml")
+        target = datetime.datetime.fromisoformat(soup.find_all("time")[-1]["datetime"])
+        when = discord.utils.format_dt(target, "R") if datetime.datetime.now(datetime.timezone.utc) < target else "**when someone wakes up**"
+        header = soup.find("h1")
+        if not header:
+            await ctx.send(f"The next round will start {when}.")
+        elif "stage 1" in header.string:
+            await ctx.send(f"The uploading stage will end {when}.")
+        else:
+            await ctx.send(f"The round will end {when}.")
+
+
+class Persona:
+    def __init__(self, row):
+        self.id = row["id"]
+        self.name = row["name"]
+        self.user = bot.get_user(row["user"])
+        self.temp = row["temp"]
+
+    def __eq__(self, other):
+        return isinstance(other, Persona) and self.id == other.id
+
+    @classmethod
+    async def convert(cls, ctx, argument):
+        async with db.execute("SELECT * FROM Personas WHERE active AND name = ?", (argument,)) as cur:
+            r = await cur.fetchone()
+        if r:
+            return cls(r)
+        raise commands.BadArgument(f"Persona '{argument}' not found.")
+
+    @property
+    def mention(self):
+        return self.name
+
+async def get_persona(id):
+    async with db.execute("SELECT * FROM Personas WHERE id = ?", (id,)) as cur:
+        r = await cur.fetchone()
+    if r:
+        return Persona(r)
+
+async def get_target(id):
+    return bot.get_channel(id) or bot.get_user(id) or await get_persona(id)
+
+async def connections(target_id):
+    async with db.execute("SELECT a FROM AnonConnections WHERE b = ?1 UNION ALL SELECT b FROM AnonConnections WHERE a = ?1", (target_id,)) as cur:
+        return [await get_target(x[0]) for x in await cur.fetchall()]
+
+async def selected_persona(user):
+    async with db.execute("SELECT Personas.* FROM SelectedPersona INNER JOIN Personas ON id = persona WHERE SelectedPersona.user = ?", (user.id,)) as cur:
+        r = await cur.fetchone()
+    return Persona(r) if r else user
+
+@bot.listen()
+async def on_message(message):
+    if message.author == bot.user or message.content.startswith("!"):
+        return
+
+    us = await selected_persona(message.author) if not message.guild else message.channel
+    our_name = us.name if isinstance(us, Persona) else message.author.display_name
+    text = message.content
+    if isinstance(us, Persona):
+        text = await transform_text(text, us.id, message.author.id)
+
+    async def msg():
+        return {"content": f"<{our_name}> {text}", "files": [await f.to_file() for f in message.attachments]}
+
+    for conn in await connections(us.id):
+        if not conn:
+            continue
+
+        if isinstance(conn, Persona) and conn.user and conn.user != message.author:
+            await conn.user.send(**await msg())
+        elif isinstance(conn, discord.User):
+            await conn.send(**await msg())
+        elif isinstance(conn, discord.TextChannel):
+            for other_conn in await connections(conn.id):
+                if other_conn and other_conn.user and other_conn.user != message.author:
+                    await other_conn.user.send(**await msg())
+            await conn.send(**await msg())
+
+Target = Persona | discord.TextChannel | discord.User
+
+@commands.dm_only()
+@commands.max_concurrency(1, wait=True)
+@bot.group(invoke_without_command=True)
+async def anon(ctx, target: Target):
+    """Anonymously message a user or channel (use in DMs)"""
+    try:
+        # find which persona we are
+        we_are = await selected_persona(ctx.author)
+        if we_are == ctx.author:
+            for we_are in await fetch_personas(ctx.author.id):
+                if await connections(we_are.id):
+                    continue
+                await db.execute("INSERT INTO SelectedPersona (user, persona) VALUES (?, ?)", (ctx.author.id, we_are.id))
+                break
+
+        if await connections(we_are.id):
+            return await ctx.send("You are already in a connection.")
+        if not isinstance(target, discord.TextChannel) and await connections(target.id):
+            return await ctx.send("Target is already in a connection.")
+
+        # tell the target what's happening
+        if isinstance(target, discord.TextChannel):
+            there = "there"
+            member = target.guild.get_member(ctx.author.id)
+            if not member or not target.permissions_for(member).send_messages:
+                return await ctx.send("You don't have permission to send messages there.")
+            await target.send(f"An anonymous user ({we_are.name}) joined the channel.")
+        elif isinstance(target, discord.User):
+            there = "to them"
+            if not (await fetch_settings(target.id))["dms"]:
+                return await ctx.send("Target doesn't accept anonymous DMs.")
+            if await selected_persona(target) != target:
+                await target.send(f"An anonymous user ({we_are.name}) is messaging you. Use `!anon switch` to be able to respond to them.")
+            else:
+                await target.send(f"An anonymous user ({we_are.name}) is messaging you. Messages you send from now on will be sent to them. Use `!anon stop` to hang up at any time.")
+        elif isinstance(target, Persona):
+            there = "to them"
+            if not (await fetch_settings(target.id))["persona_dms"]:
+                return await ctx.send("Target doesn't accept anonymous DMs via persona.")
+            if not target.user:
+                return await ctx.send(f"A persona called '{target}' exists, but its owner can't be found. (They probably don't share a server with the bot.)")
+            if await selected_persona(target.user) != target:
+                await target.user.send("An anonymous user ({we_are.name}) is messaging your persona **{target.name}** anonymously. Use `!anon switch {target.name}` to be able to respond to them.")
+            else:
+                await target.user.send("An anonymous user ({we_are.name}) is messaging your persona **{target.name}** anonymously. They do not know who controls it. Messages you send from now on will be sent to them. Use `!anon stop` to hang up at any time.")
+
+        # form connection
+        await db.execute("INSERT INTO AnonConnections (a, b) VALUES (?, ?)", (we_are.id, target.id))
+        await db.commit()
+
+        await ctx.send(f"Now connected to {target.mention} as **{we_are.name}**. Use `!anon stop` to disconnect.\nMessages (except commands) sent here will be relayed {there}. Disable automatic normalisation for a single message by prefixing it with `\\`.\n**NOTE**: Full anonymity is not guaranteed. Privileged users can access your identity.")
+    finally:
+        await db.rollback()
+
+@anon.command(aliases=["ls"])
+async def who(ctx):
+    """See who is connected to the current channel."""
+    if ctx.guild:
+        await ctx.send("\n".join(f"- {conn.mention}" for conn in await connections(ctx.channel.id) if conn) or "Nobody!")
+    else:
+        async with db.execute(
+            "WITH us (id) AS (VALUES (?1) UNION ALL SELECT id FROM Personas WHERE user = ?1)"
+            "SELECT id, a FROM us INNER JOIN AnonConnections ON b = id "
+            "UNION ALL SELECT id, b FROM us INNER JOIN AnonConnections ON a = id",
+            (ctx.author.id,),
+        ) as cur:
+            r = await cur.fetchall()
+
+        selected = await selected_persona(ctx.author)
+        main = f"You are not connected to anyone as {selected.mention}."
+        alt = []
+        for we_are, conn in r:
+            we_are = await get_target(we_are)
+            conn = await get_target(conn)
+            if we_are.id == selected.id:
+                main = f"You are connected to {conn.mention} as {selected.mention}."
+            else:
+                switch = "`!anon switch`" if we_are == ctx.author else f"`!anon switch {we_are.name}`"
+                alt.append(f"- {conn.mention} (as {we_are.mention}; {switch})")
+        if alt:
+            main += f"\n## Other connections\n{"\n".join(alt)}"
+
+        await ctx.send(main)
+
+@commands.dm_only()
+@anon.command(aliases=["cd"])
+async def switch(ctx, *, target: Target = commands.Author):
+    """Change which of your personas is the 'active' one."""
+    for to in [target, *await connections(target.id)]:
+        if to == ctx.author or isinstance(to, Persona) and to.user == ctx.author:
+            break
+    else:
+        return await ctx.send(f"{target.mention} is not you nor one of your connections.")
+
+    if to == ctx.author:
+        await db.execute("DELETE FROM SelectedPersona WHERE user = ?", (ctx.author.id,))
+    else:
+        await db.execute("INSERT OR REPLACE INTO SelectedPersona (user, persona) VALUES (?, ?)", (ctx.author.id, to.id))
+
+    await db.commit()
+
+    if conns := await connections(to.id):
+        await ctx.send(f"Switched to {to.mention}. Your messages are now being sent to {conns[0].mention}. Use `!anon stop` to disconnect.")
+    else:
+        await ctx.send(f"Switched to {to.mention}.")
+ 
+@commands.dm_only()
+@anon.command(aliases=["rm", "leave"])
+async def stop(ctx):
+    """Disconnect from the current session."""
+    we_are = await selected_persona(ctx.author)
+    async with db.execute("DELETE FROM AnonConnections WHERE a = ?1 OR b = ?1 RETURNING a, b", (we_are.id,)) as cur:
+        r = await cur.fetchone()
+    await db.commit()
     if not r:
-        return {"result": "missing"}, 404
-    return {"result": "success", **r}
+        return await ctx.send("{we_are.mention} is not connected anywhere.")
+    for x in r:
+        if x != we_are.id:
+            break
+    victim = await get_target(x)
+    await getattr(victim, "user", victim).send(f"{we_are.mention} disconnected.")
+    await ctx.send(f"Disconnected from {victim.mention}.")
 
-@app.route("/personas/purge", methods=["POST"])
-def clear_temp_personas():
-    db = get_db()
-    db.execute("UPDATE Personas SET active = 0 WHERE temp")
-    db.commit()
-    return "", 204
+
+async def database(_):
+    global db
+    async with aiosqlite.connect("the.db", autocommit=False) as db:
+        db.row_factory = aiosqlite.Row
+        yield
+
+async def the_bot(_):
+    global session
+    async with aiohttp.ClientSession(headers={"User-Agent": "Canon"}) as session:
+        task = asyncio.create_task(bot.start(config.token))
+        yield
+    await bot.close()
+
+app = web.Application()
+app.add_routes(routes)
+
+app.cleanup_ctx.append(database)
+if config.token:
+    app.cleanup_ctx.append(the_bot)
+
+web.run_app(app, port=40543)
