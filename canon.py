@@ -81,10 +81,9 @@ async def add_persona(request):
     if not name:
         return web.json_response({"result": "taken"}, status=403)
 
-    async with db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?) RETURNING id", (user, name, json.get("temp", False))) as cur:
-        id, = await cur.fetchone()
+    await db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?)", (user, name, json.get("temp", False)))
     await db.commit()
-    return web.json_response({"result": "success", "id": id})
+    return web.json_response({"result": "success"})
 
 async def fetch_settings(user):
     async with db.execute("SELECT * FROM Settings WHERE user = ?", (user,)) as cur:
@@ -137,15 +136,18 @@ async def settings(request):
     s = await fetch_settings(user)
     return web.json_response([{"value": s[d["name"]], **d} for d in blurbs])
 
+async def emplace_settings(user, s):
+    await db.execute(
+        "INSERT OR REPLACE INTO Settings (user, gpt, lowercase, punctuation, notify_comments, notify_replies, dms, persona_dms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user, "gpt" in s, "lowercase" in s, "punctuation" in s, "notify_comments" in s, "notify_replies" in s, "dms" in s, "persona_dms" in s),
+    )
+    await db.commit()
+
 @routes.post(r"/users/{user:\d+}/settings")
 async def set_settings(request):
     user = int(request.match_info["user"])
     settings = await request.json()
-    await db.execute(
-        "INSERT OR REPLACE INTO Settings (user, gpt, lowercase, punctuation, notify_comments, notify_replies, dms, persona_dms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (user, "gpt" in settings, "lowercase" in settings, "punctuation" in settings, "notify_comments" in settings, "notify_replies" in settings, "dms" in settings, "persona_dms" in settings),
-    )
-    await db.commit()
+    await emplace_settings(user, settings)
     return web.Response(status=204)
 
 async def transform_text(text, persona, user_id):
@@ -328,22 +330,20 @@ async def on_message(message):
     if isinstance(us, Persona):
         text = await transform_text(text, us.id, message.author.id)
 
-    async def msg():
-        return {"content": f"<{our_name}> {text}", "files": [await f.to_file() for f in message.attachments]}
-
+    targets = set()
     for conn in await connections(us.id):
-        if not conn:
+        if isinstance(conn, Persona):
+            targets.add(conn.user)
             continue
-
-        if isinstance(conn, Persona) and conn.user and conn.user != message.author:
-            await conn.user.send(**await msg())
-        elif isinstance(conn, discord.User):
-            await conn.send(**await msg())
-        elif isinstance(conn, discord.TextChannel):
+        if isinstance(conn, discord.TextChannel):
             for other_conn in await connections(conn.id):
-                if other_conn and other_conn.user and other_conn.user != message.author:
-                    await other_conn.user.send(**await msg())
-            await conn.send(**await msg())
+                if other_conn:
+                    targets.add(other_conn.user)
+        targets.add(conn)
+    targets -= {message.author, None}
+
+    for target in targets:
+        await target.send(f"<{our_name}> {text}", files=[await f.to_file() for f in message.attachments])
 
 Target = Persona | discord.TextChannel | discord.User
 
@@ -462,13 +462,72 @@ async def stop(ctx):
         r = await cur.fetchone()
     await db.commit()
     if not r:
-        return await ctx.send("{we_are.mention} is not connected anywhere.")
+        return await ctx.send(f"{we_are.mention} is not connected anywhere.")
     for x in r:
         if x != we_are.id:
             break
     victim = await get_target(x)
     await getattr(victim, "user", victim).send(f"{we_are.mention} disconnected.")
     await ctx.send(f"Disconnected from {victim.mention}.")
+
+@commands.dm_only()
+@anon.group(aliases=["persona"], invoke_without_command=True)
+async def personas(ctx):
+    """List your anonymous personas."""
+    r = []
+    for persona in await fetch_personas(ctx.author.id):
+        r.append(f"- **{persona.name}**" + " *(temp)*"*persona.temp)
+    await ctx.send("\n".join(r))
+
+@commands.dm_only()
+@personas.command(aliases=["new", "create", "make"])
+async def add(ctx, *, name):
+    if await conflicts(name):
+        return await ctx.send("That name is taken or reserved.")
+    await db.execute("INSERT INTO Personas (user, name) VALUES (?, ?)", (ctx.author.id, name))
+    await db.commit()
+    await ctx.send(f"Created a persona named '{name}'.")
+
+@commands.dm_only()
+@personas.command(aliases=["delete", "del", "rm", "nix"])
+async def remove(ctx, *, name):
+    async with db.execute("UPDATE Personas SET active = 0 WHERE active AND user = ? AND name = ? RETURNING 1", (ctx.author.id, name)) as cur:
+        if not await cur.fetchone():
+            return await ctx.send(f"You have no persona named '{name}'.")
+    await db.commit()
+    await ctx.send(f"Deleted persona '{name}'.")
+
+def cfg_norm(s):
+    return s.replace("_", "-")
+
+@commands.dm_only()
+@anon.command(aliases=["settings", "config", "opt", "options"])
+async def cfg(ctx, name=None, value: bool = None):
+    name = name and cfg_norm(name)
+    settings = await fetch_settings(ctx.author.id)
+    if value is None:
+        embed = discord.Embed()
+        for setting in blurbs:
+            n = cfg_norm(setting["name"])
+            if name and n != name:
+                continue
+            v = "yneos"[not settings[setting["name"]]::2]
+            embed.add_field(name=f"{setting["display"]} (`!anon cfg {n} {v}`)", value=setting["blurb"], inline=False)
+        await ctx.send(embed=embed)
+    else:
+        s = set()
+        seen = False
+        for setting in blurbs:
+            if cfg_norm(setting["name"]) == name:
+                seen = True
+                if value:
+                    s.add(setting["name"])
+            elif settings[setting["name"]]:
+                s.add(setting["name"])
+        if not seen:
+            return await ctx.send(f"No option called '{name}' exists.")
+        await emplace_settings(ctx.author.id, s)
+        await ctx.send(f"Set option '{name}' to {value}.")
 
 
 async def database(_):
