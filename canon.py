@@ -81,9 +81,10 @@ async def add_persona(request):
     if not name:
         return web.json_response({"result": "taken"}, status=403)
 
-    await db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?)", (user, name, json.get("temp", False)))
+    async with db.execute("INSERT INTO Personas (user, name, temp) VALUES (?, ?, ?) RETURNING id", (user, name, json.get("temp", False))) as cur:
+        id, = await cur.fetchone()
     await db.commit()
-    return web.json_response({"result": "success"})
+    return web.json_response({"result": "success", "id": id})
 
 async def fetch_settings(user):
     async with db.execute("SELECT * FROM Settings WHERE user = ?", (user,)) as cur:
