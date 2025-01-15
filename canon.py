@@ -442,7 +442,7 @@ async def who(ctx):
 
 @commands.dm_only()
 @anon.command(aliases=["cd"])
-async def switch(ctx, *, target: Target = commands.Author.replace(description="Name of the persona to switch to, or of somewhere one of your personas is connected")):
+async def switch(ctx, *, target = commands.Author.replace(annotation=Target, description="Name of the persona to switch to, or of somewhere one of your personas is connected")):
     """Change which of your personas is the 'active' one.
 
     Messages you send are bridged to wherever your active persona is connected. `!anon` and `!anon stop` also act only on your active persona.
