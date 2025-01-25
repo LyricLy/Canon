@@ -550,7 +550,7 @@ async def cfg(
     name = option and cfg_norm(option)
     settings = await fetch_settings(ctx.author.id)
     if value is None:
-        embed = discord.Embed().set_footer(text=f"Publicly discernable settings have entropy of ~{await fetch_entropy(ctx.author.id):.2f} bits (lower is better)")
+        embed = discord.Embed().set_footer(text=f"Settings have ~{await fetch_entropy(ctx.author.id):.2f} bits of identifiable information (lower is better)")
         for setting in blurbs:
             n = cfg_norm(setting["name"])
             if name and n != name:
