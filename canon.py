@@ -93,6 +93,20 @@ async def fetch_settings(user):
     async with db.execute("INSERT OR IGNORE INTO Settings (user) VALUES (?) RETURNING *", (user,)) as cur:
         return dict(await cur.fetchone())
 
+async def fetch_entropy(user):
+    async with db.execute("""
+      SELECT
+        -log2(AVG(our_settings.gpt = their_settings.gpt)) +
+        -log2(AVG(our_settings.lowercase = their_settings.lowercase)) +
+        -log2(AVG(our_settings.punctuation = their_settings.punctuation)) +
+        -log2(AVG(our_settings.dms = their_settings.dms)) +
+        -log2(AVG(our_settings.persona_dms = their_settings.persona_dms))
+      FROM Settings AS our_settings, Settings as their_settings
+      WHERE our_settings.user = ? AND EXISTS(SELECT 1 FROM Personas WHERE user = their_settings.user and last_used > ?)
+    """, (user, time.time() - 35*24*60*60)) as cur:
+        entropy, = await cur.fetchone()
+    return entropy
+
 blurbs = [
     {
         "name": "gpt",
@@ -135,7 +149,8 @@ blurbs = [
 async def settings(request):
     user = int(request.match_info["user"])
     s = await fetch_settings(user)
-    return web.json_response([{"value": s[d["name"]], **d} for d in blurbs])
+    entropy = await fetch_entropy(user)
+    return web.json_response({"settings": [{"value": s[d["name"]], **d} for d in blurbs], "entropy": entropy})
 
 async def emplace_settings(user, s):
     await db.execute(
@@ -535,7 +550,7 @@ async def cfg(
     name = option and cfg_norm(option)
     settings = await fetch_settings(ctx.author.id)
     if value is None:
-        embed = discord.Embed()
+        embed = discord.Embed().set_footer(text=f"Publicly discernable settings have entropy of ~{await fetch_entropy(ctx.author.id):.2f} bits (lower is better)")
         for setting in blurbs:
             n = cfg_norm(setting["name"])
             if name and n != name:
