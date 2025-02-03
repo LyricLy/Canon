@@ -40,11 +40,17 @@ async def conflicts(name):
 @routes.get(r"/users/{user:\d+}")
 async def can_play(request):
     user = int(request.match_info["user"])
-    if bot.is_ready():
-        can_play = bool(bot.get_guild(config.guild_id).get_member(user))
+    if guild := bot.get_guild(config.guild_id):
+        can_play = bool(guild.get_member(user))
     else:
         can_play = not config.guild_id
-    return web.json_response({"can_play": can_play, "is_admin": user in our_staff()})
+    return web.json_response({"can_play": can_play})
+
+@routes.get(r"/users/{user:\d+}/roles/{role:\d+}")
+async def has_role(request):
+    user = int(request.match_info["user"])
+    role = int(request.match_info["role"])
+    return web.json_response(bool((guild := bot.get_guild(config.guild_id)) and (member := guild.get_member(user)) and member.get_role(role)))
 
 async def fetch_personas(user):
     async with db.execute("SELECT EXISTS(SELECT 1 FROM Personas WHERE active AND toki_pona AND user = ?)", (user,)) as cur:
@@ -199,8 +205,6 @@ async def transform(request):
 
 @routes.post("/notify")
 async def notify(request):
-    if not bot.is_ready() or not config.guild_id:
-        return web.Response(status=204)
     json = await request.json()
     parent = json["parent"]
     reply = json["reply"]
@@ -215,8 +219,8 @@ async def notify(request):
     if (await fetch_settings(reply))["notify_replies"]:
         messages[reply] = "replied to your comment"
     for k, v in messages.items():
-        if k != user:
-            asyncio.create_task(bot.get_user(k).send(f"{name} {v} at <{url}>:\n{content}"))
+        if k != user and (obj := bot.get_user(k)):
+            asyncio.create_task(obj.send(f"{name} {v} at <{url}>:\n{content}"))
     return web.Response(status=204)
 
 def our_staff():
@@ -226,10 +230,16 @@ def our_staff():
 
 @routes.post("/round-over")
 async def round_over(request):
-    if config.guild_id and (guild := bot.get_guild(config.guild_id)):
-        for admin_id in our_staff():
+    targets = await request.json()
+
+    if guild := bot.get_guild(config.guild_id):
+        if isinstance(targets, int):
+            targets = [x.id for x in guild.get_role(targets).members]
+
+        for admin_id in targets:
             if admin := guild.get_member(admin_id):
                 asyncio.create_task(admin.send("everyone has finished guessing"))
+
     return web.Response(status=204)
 
 @routes.get(r"/personas/{persona:\d+}")
