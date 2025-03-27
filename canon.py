@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import random
+import re
 import time
 
 import aiosqlite
@@ -582,6 +583,73 @@ async def cfg(
             return await ctx.send(f"No option called '{name}' exists.")
         await emplace_settings(ctx.author.id, s)
         await ctx.send(f"Set option '{name}' to {value}.")
+
+
+def only_from(user_id):
+    return commands.check(lambda ctx: ctx.author.id == user_id)
+
+if config.rotg_channel:
+    @bot.group(invoke_without_command=True)
+    async def meow(ctx, *, what):
+        """Begin treating a given word as a 'meow'."""
+        await db.execute("INSERT OR IGNORE INTO Meows (meow) VALUES (?)", (what,))
+        await db.commit()
+        await ctx.send("🐱")
+
+    @meow.command(aliases=["remove"])
+    async def un(ctx, *, what):
+        """Stop treating a given word as a meow."""
+        await db.execute("DELETE FROM Meows WHERE meow = ?", (what,))
+        await db.commit()
+        await ctx.send("😼")
+
+    @meow.command()
+    async def list(ctx):
+        """List all words currently being treated as meows."""
+        async with db.execute("SELECT meow FROM Meows") as cur:
+            await ctx.send("\n".join(f"- {meow}" for meow, in await cur.fetchall()))
+
+    @meow.command()
+    async def info(ctx):
+        """Request all tracked meow information."""
+        async with db.execute("SELECT count, prev_time + COALESCE(UNIXEPOCH() - time_started, 0) FROM MeowInfo") as cur:
+            count, total_time = await cur.fetchone()
+        if not total_time:
+            return await ctx.send("Meow counting hasn't started yet!")
+        await ctx.send(f"There have been {count} meows in total ({count / (total_time / 86400):.2f} per day)")
+
+    @meow.command()
+    @only_from(config.rotg_admin)
+    async def start(ctx):
+        """Start counting meows."""
+        await db.execute("UPDATE MeowInfo SET time_started = COALESCE(time_started, UNIXEPOCH())")
+        await db.commit()
+        await ctx.send("🎬")
+
+    @meow.command()
+    @only_from(config.rotg_admin)
+    async def stop(ctx):
+        """Stop counting meows."""
+        await db.execute("UPDATE MeowInfo SET prev_time = prev_time + COALESCE(UNIXEPOCH() - time_started, 0), time_started = NULL")
+        await db.commit()
+        await ctx.send("🎬")
+
+    def count_matches(needle, haystack):
+        # this is really stupid lol
+        pattern = re.sub(r"(\\\s)+", r"\\s+", re.sub(r"\b", r"\\b", re.escape(needle)))
+        return len(re.findall(pattern, haystack))
+
+    @bot.listen()
+    async def on_message(message):
+        if message.channel.id != config.rotg_channel or message.content.startswith("!"):
+            return
+        c = 0
+        async with db.execute("SELECT meow FROM Meows") as cur:
+            async for meow, in cur:
+                c += count_matches(meow, message.content)
+        if c:
+            await db.execute("UPDATE MeowInfo SET count = count + ?*(time_started IS NOT NULL)", (c,))
+            await db.commit()
 
 
 async def database(_):

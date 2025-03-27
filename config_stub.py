@@ -12,3 +12,8 @@ guild_id = None
 # URL to code guessing server
 # Used for !cg command that displays game status
 cg_url = None
+
+# rotg constants
+# leave as None
+rotg_admin = None
+rotg_channel = None
