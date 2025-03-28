@@ -637,7 +637,7 @@ if config.rotg_channel:
 
     def count_matches(needle, haystack):
         # this is really stupid lol
-        pattern = re.sub(r"(\\\s)+", r"\\s+", re.sub(r"\b", r"\\b", re.escape(needle)))
+        pattern = re.sub(r"(\\\s)+", r"\\s+", re.sub(r"\b", r"\\b", re.escape(needle), flags=re.I))
         return len(re.findall(pattern, haystack))
 
     @bot.listen()
