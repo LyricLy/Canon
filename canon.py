@@ -612,17 +612,18 @@ if config.rotg_channel:
     @meow.command()
     async def info(ctx):
         """Request all tracked meow information."""
-        async with db.execute("SELECT count, prev_time + COALESCE(UNIXEPOCH() - time_started, 0) FROM MeowInfo") as cur:
+        async with db.execute("SELECT count, UNIXEPOCH() - time_started FROM MeowInfo") as cur:
             count, total_time = await cur.fetchone()
         if not total_time:
-            return await ctx.send("Meow counting hasn't started yet!")
-        await ctx.send(f"There have been {count} meows in total ({count / (total_time / 86400):.2f} per day)")
+            return await ctx.send("No round is running.")
+        word_count = f"There have been {count} meows this round" if count != 1 else "There has been 1 meow in total"
+        await ctx.send(f"{word_count} ({count / (total_time / 3600):.2f} per hour)")
 
     @meow.command()
     @only_from(config.rotg_admin)
     async def start(ctx):
         """Start counting meows."""
-        await db.execute("UPDATE MeowInfo SET time_started = COALESCE(time_started, UNIXEPOCH())")
+        await db.execute("UPDATE MeowInfo SET count = 0, time_started = COALESCE(time_started, UNIXEPOCH())")
         await db.commit()
         await ctx.send("🎬")
 
@@ -630,7 +631,7 @@ if config.rotg_channel:
     @only_from(config.rotg_admin)
     async def stop(ctx):
         """Stop counting meows."""
-        await db.execute("UPDATE MeowInfo SET prev_time = prev_time + COALESCE(UNIXEPOCH() - time_started, 0), time_started = NULL")
+        await db.execute("UPDATE MeowInfo SET time_started = NULL")
         await db.commit()
         await ctx.send("🎬")
 
@@ -648,7 +649,7 @@ if config.rotg_channel:
             async for meow, in cur:
                 c += count_matches(meow, message.content)
         if c:
-            await db.execute("UPDATE MeowInfo SET count = count + ?*(time_started IS NOT NULL)", (c,))
+            await db.execute("UPDATE MeowInfo SET count = count + ?", (c,))
             await db.commit()
 
 

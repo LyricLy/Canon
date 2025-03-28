@@ -33,7 +33,6 @@ CREATE TABLE AnonConnections (
 CREATE TABLE MeowInfo (
     unit INTEGER PRIMARY KEY CHECK (unit = 1),
     count INTEGER NOT NULL DEFAULT 0,
-    prev_time INTEGER NOT NULL DEFAULT 0,
     time_started INTEGER
 );
 
