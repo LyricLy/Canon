@@ -642,7 +642,7 @@ if config.rotg_channel:
 
     @bot.listen()
     async def on_message(message):
-        if message.channel.id != config.rotg_channel or message.content.startswith("!"):
+        if message.author.bot or message.channel.id != config.rotg_channel or message.content.startswith("!"):
             return
         c = 0
         async with db.execute("SELECT meow FROM Meows") as cur:
