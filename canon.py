@@ -118,7 +118,7 @@ blurbs = [
     {
         "name": "gpt",
         "display": "Use GPT",
-        "blurb": "Use OpenAI's GPT-4 to transform your writing and make you harder to identify. (Note that this sends your messages to OpenAI's servers.)",
+        "blurb": "Use OpenAI's GPT-4.1 to transform your writing and make you harder to identify. (Note that this sends your messages to OpenAI's servers.)",
     },
     {
         "name": "lowercase",
@@ -184,7 +184,7 @@ async def transform_text(text, persona, user_id):
     else:
         if settings["gpt"]:
             completion = await openai.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4.1",
                 messages=[
                     {"role": "system", "content": """As a bot that helps people remain anonymous, you rewrite messages to sound more generic. Your responses should always have the same meaning, perspective and similar tone to the original message, but with different wording and grammar. Please take care to preserve the meaning of programming- and computer-related terms. "code guessing" is a proper noun and should never be changed. Discord markup should also be left alone."""},
                     {"role": "user", "content": text},
