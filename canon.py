@@ -20,8 +20,8 @@ if config.log_file:
 else:
     discord.utils.setup_logging()
 
-
-openai = AsyncOpenAI()
+#openai = AsyncOpenAI()
+openai = None
 routes = web.RouteTableDef()
 
 with open("names") as f:
@@ -609,6 +609,16 @@ if config.rotg_channel:
         async with db.execute("SELECT meow FROM Meows") as cur:
             await ctx.send("\n".join(f"- {meow}" for meow, in await cur.fetchall()))
 
+    async def generate_table():
+        table = ""
+        async with db.execute("SELECT user, count FROM UserMeows ORDER BY count DESC") as cur:
+            rows = await cur.fetchall()  # fetchall is async
+            place = 1
+            for user in rows:
+                table += f"{place}. <@{user['user']}> - {user['count']}\n"
+                place += 1
+        return table
+    
     @meow.command()
     async def info(ctx):
         """Request all tracked meow information."""
@@ -617,7 +627,10 @@ if config.rotg_channel:
         if not total_time:
             return await ctx.send("No round is running.")
         word_count = f"There have been {count} meows this round" if count != 1 else "There has been 1 meow in total"
-        await ctx.send(f"{word_count} ({count / (total_time / 3600):.2f} per hour)")
+        table = await generate_table()
+        embed = discord.Embed(title = "Player - Meows", color = discord.Color.teal())
+        embed.add_field(name="", value=table+"\n"+f"{word_count} ({count / (total_time / 3600):.2f} per hour)")
+        await ctx.send(embed=embed)
 
     @meow.command()
     @only_from(config.rotg_admin)
@@ -650,6 +663,8 @@ if config.rotg_channel:
                 c += count_matches(meow, message.content)
         if c:
             await db.execute("UPDATE MeowInfo SET count = count + ?", (c,))
+            await db.execute("INSERT INTO UserMeows (user, count) VALUES (?, ?) \
+                              ON CONFLICT(user) DO UPDATE SET count=count+?;", (message.author.id,c,c))
             await db.commit()
 
 
