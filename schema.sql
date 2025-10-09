@@ -32,7 +32,6 @@ CREATE TABLE AnonConnections (
 
 CREATE TABLE MeowInfo (
     unit INTEGER PRIMARY KEY CHECK (unit = 1),
-    count INTEGER NOT NULL DEFAULT 0,
     time_started INTEGER
 );
 
@@ -40,4 +39,9 @@ INSERT INTO MeowInfo DEFAULT VALUES;
 
 CREATE TABLE Meows (
     meow TEXT PRIMARY KEY NOT NULL
+);
+
+CREATE TABLE UserMeows (
+    user INTEGER PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
 );

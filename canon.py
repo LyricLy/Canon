@@ -609,21 +609,36 @@ if config.rotg_channel:
         async with db.execute("SELECT meow FROM Meows") as cur:
             await ctx.send("\n".join(f"- {meow}" for meow, in await cur.fetchall()))
 
+    async def generate_table():
+        count = 0
+        table = []
+        async with db.execute("SELECT user, count FROM UserMeows ORDER BY count DESC") as cur:
+            rows = await cur.fetchall()
+        for place, user in enumerate(rows, start=1):
+            count += user["count"]
+            table.append(f"{place}. <@{user['user']}> - {user['count']}")
+        return count, "\n".join(table)
+
     @meow.command()
     async def info(ctx):
         """Request all tracked meow information."""
-        async with db.execute("SELECT count, UNIXEPOCH() - time_started FROM MeowInfo") as cur:
-            count, total_time = await cur.fetchone()
+        async with db.execute("SELECT UNIXEPOCH() - time_started FROM MeowInfo") as cur:
+            total_time, = await cur.fetchone()
         if not total_time:
             return await ctx.send("No round is running.")
+        count, table = await generate_table()
         word_count = f"There have been {count} meows this round" if count != 1 else "There has been 1 meow in total"
-        await ctx.send(f"{word_count} ({count / (total_time / 3600):.2f} per hour)")
+        embed = discord.Embed(title="Player - Meows", colour=discord.Colour.teal())
+        embed.add_field(name="", value=table)
+        embed.set_footer(text=f"{word_count} ({count / (total_time / 3600):.2f} per hour)")
+        await ctx.send(embed=embed)
 
     @meow.command()
     @only_from(config.rotg_admin)
     async def start(ctx):
         """Start counting meows."""
-        await db.execute("UPDATE MeowInfo SET count = 0, time_started = COALESCE(time_started, UNIXEPOCH())")
+        await db.execute("UPDATE MeowInfo SET time_started = COALESCE(time_started, UNIXEPOCH())")
+        await db.execute("DELETE FROM UserMeows")
         await db.commit()
         await ctx.send("🎬")
 
@@ -649,7 +664,7 @@ if config.rotg_channel:
             async for meow, in cur:
                 c += count_matches(meow, message.content)
         if c:
-            await db.execute("UPDATE MeowInfo SET count = count + ?", (c,))
+            await db.execute("INSERT INTO UserMeows (user, count) VALUES (?1, ?2) ON CONFLICT (user) DO UPDATE SET count = count + ?2", (message.author.id, c))
             await db.commit()
 
 
