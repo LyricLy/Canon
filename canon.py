@@ -248,11 +248,15 @@ async def get_persona(request):
     persona = int(request.match_info["persona"])
     return web.json_response({"name": (await get_persona(persona)).name})
 
+async def un_persona(persona):
+    await db.execute("UPDATE Personas SET active = 0 WHERE id = ?", (persona,))
+    await db.execute("DELETE FROM AnonConnections WHERE a = ?1 OR b = ?1", (persona,))
+    await db.execute("DELETE FROM SelectedPersona WHERE persona = ?", (persona,))
+    await db.commit()
+
 @routes.delete(r"/personas/{persona:\d+}")
 async def disable_persona(request):
-    persona = int(request.match_info["persona"])
-    await db.execute("UPDATE Personas SET active = 0 WHERE id = ?", (persona,))
-    await db.commit()
+    await un_persona(int(request.match_info["persona"]))
     return web.Response(status=204)
 
 @routes.patch(r"/personas/{persona:\d+}")
@@ -267,8 +271,9 @@ async def edit_persona(request):
 
 @routes.post("/personas/purge")
 async def clear_temp_personas(request):
-    await db.execute("UPDATE Personas SET active = 0 WHERE temp")
-    await db.commit()
+    async with db.execute("SELECT id FROM Personas WHERE active AND temp") as cur:
+        async for persona, in cur:
+            await un_persona(persona)
     return web.Response(status=204)
 
 
@@ -535,10 +540,10 @@ async def add(ctx, *, name=commands.param(description="Name of the persona to cr
 @personas.command(aliases=["delete", "del", "rm", "nix"])
 async def remove(ctx, *, name=commands.param(description="Name of the persona to remove")):
     """Remove a persona."""
-    async with db.execute("UPDATE Personas SET active = 0 WHERE active AND user = ? AND name = ? RETURNING 1", (ctx.author.id, name)) as cur:
-        if not await cur.fetchone():
+    async with db.execute("SELECT id FROM Personas WHERE active AND user = ? AND name = ?", (ctx.author.id, name)) as cur:
+        if not (r := await cur.fetchone()):
             return await ctx.send(f"You have no persona named '{name}'.")
-    await db.commit()
+    await un_persona(r[0])
     await ctx.send(f"Deleted persona '{name}'.")
 
 def cfg_norm(s):
