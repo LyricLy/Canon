@@ -112,7 +112,7 @@ async def fetch_entropy(user):
       WHERE our_settings.user = ? AND EXISTS(SELECT 1 FROM Personas WHERE user = their_settings.user and last_used > ?)
     """, (user, time.time() - 35*24*60*60)) as cur:
         entropy, = await cur.fetchone()
-    return entropy
+    return entropy or 0
 
 blurbs = [
     {
