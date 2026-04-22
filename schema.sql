@@ -10,7 +10,6 @@ CREATE TABLE Personas (
 
 CREATE TABLE Settings (
     user INTEGER PRIMARY KEY,
-    gpt INTEGER NOT NULL DEFAULT 0,
     lowercase INTEGER NOT NULL DEFAULT 1,
     punctuation INTEGER NOT NULL DEFAULT 1,
     notify_comments INTEGER NOT NULL DEFAULT 1,

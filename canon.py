@@ -11,7 +11,6 @@ import discord
 from aiohttp import web
 from discord.ext import commands
 from bs4 import BeautifulSoup
-from openai import AsyncOpenAI
 
 import config
 
@@ -21,7 +20,6 @@ else:
     discord.utils.setup_logging()
 
 
-openai = AsyncOpenAI()
 routes = web.RouteTableDef()
 
 with open("names") as f:
@@ -103,7 +101,6 @@ async def fetch_settings(user):
 async def fetch_entropy(user):
     async with db.execute("""
       SELECT
-        -log2(AVG(our_settings.gpt = their_settings.gpt)) +
         -log2(AVG(our_settings.lowercase = their_settings.lowercase)) +
         -log2(AVG(our_settings.punctuation = their_settings.punctuation)) +
         -log2(AVG(our_settings.dms = their_settings.dms)) +
@@ -115,11 +112,6 @@ async def fetch_entropy(user):
     return entropy or 0
 
 blurbs = [
-    {
-        "name": "gpt",
-        "display": "Use GPT",
-        "blurb": "Use OpenAI's GPT-4.1 to transform your writing and make you harder to identify. (Note that this sends your messages to OpenAI's servers.)",
-    },
     {
         "name": "lowercase",
         "display": "lowercase everything",
@@ -161,8 +153,8 @@ async def settings(request):
 
 async def emplace_settings(user, s):
     await db.execute(
-        "INSERT OR REPLACE INTO Settings (user, gpt, lowercase, punctuation, notify_comments, notify_replies, dms, persona_dms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (user, "gpt" in s, "lowercase" in s, "punctuation" in s, "notify_comments" in s, "notify_replies" in s, "dms" in s, "persona_dms" in s),
+        "INSERT OR REPLACE INTO Settings (user, lowercase, punctuation, notify_comments, notify_replies, dms, persona_dms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (user, "lowercase" in s, "punctuation" in s, "notify_comments" in s, "notify_replies" in s, "dms" in s, "persona_dms" in s),
     )
     await db.commit()
 
@@ -182,15 +174,6 @@ async def transform_text(text, persona, user_id):
     if text.startswith("\\"):
         text = text[1:]
     else:
-        if settings["gpt"]:
-            completion = await openai.chat.completions.create(
-                model="gpt-4.1",
-                messages=[
-                    {"role": "system", "content": """As a bot that helps people remain anonymous, you rewrite messages to sound more generic. Your responses should always have the same meaning, perspective and similar tone to the original message, but with different wording and grammar. Please take care to preserve the meaning of programming- and computer-related terms. "code guessing" is a proper noun and should never be changed. Discord markup should also be left alone."""},
-                    {"role": "user", "content": text},
-                ],
-            )
-            text = completion.choices[0].message.content
         if settings["lowercase"]:
             text = text.lower()
         if settings["punctuation"]:
