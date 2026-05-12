@@ -248,7 +248,7 @@ async def edit_persona(request):
     name = await parse_user_obj(json)
     if not name:
         return web.json_response({"result": "taken"}, status=403)
-    await db.execute("UPDATE Personas SET name = ? WHERE id = ?", (name, id))
+    await db.execute("UPDATE Personas SET name = ? WHERE id = ?", (name, int(request.match_info["persona"])))
     await db.commit()
     return web.json_response({"result": "success"})
 
